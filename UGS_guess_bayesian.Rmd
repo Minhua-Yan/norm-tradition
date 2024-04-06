@@ -1,0 +1,258 @@
+---
+title: "UGS_guess_bayesian"
+output: 
+   html_document:
+     self_contained: false
+date: "2023-12-21"
+---
+
+
+```{r}
+library(openxlsx)
+library(dplyr)
+library(tidyr)
+library(polycor)
+library(data.table)
+library(stringi)
+library(xtable)
+library(rethinking)
+```
+
+
+```{r}
+# in case of data file changes
+# if new CFP columns are added, all codes that go from CFP1 to CFP5 in the current file also needs to be applied to the new CFP columns
+# if the CFP preferences are not only separated to `RLB` and `HD`, the first mutate function in "replace subject IDs without preference info with NA in this section" needs to add the new preference categories accordingly
+
+setwd("C:/Users/Minhua/Desktop/Derung individual norm decision making/data files")
+subCF_NW = read.xlsx("UGS_SBJ_subCF_NW.xlsx", sheet=1)
+# group all preferred divisions that reward labor to `RLB`
+UGS_norm_traits = read.xlsx("individual_norm_algorithm.xlsx", sheet=1) %>%
+   select(c("subjectID","ulti_pref_RLB","ulti_expected_mostOther_pref")) %>%
+   filter(!is.na(ulti_pref_RLB)) %>%
+   mutate(ulti_pref_RLB = replace(ulti_pref_RLB, ulti_pref_RLB=="LABOR"|ulti_pref_RLB=="MTLABOR"|ulti_pref_RLB=="INBTW","RLB"),
+          ulti_expected_mostOther_pref = replace(ulti_expected_mostOther_pref, ulti_expected_mostOther_pref=="LABOR"|ulti_expected_mostOther_pref=="MTLABOR"|ulti_expected_mostOther_pref=="INBTW","RLB"))
+```
+
+```{r}
+# replace the IDs of sub CF partners with the partners' UG labor preferences
+# if a CFP did not participate in UGS, replace the ID with "MISSING"
+#subCF_NW$CFP1[!is.na(subCF_NW$CFP1) & !subCF_NW$CFP1 %in% UGS_norm_traits$subjectID] = "MISSING"
+subCF_NW$CFP1[subCF_NW$CFP1 %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$CFP1, UGS_norm_traits$subjectID, nomatch = 0)]
+
+#subCF_NW$CFP2[!is.na(subCF_NW$CFP2) & !subCF_NW$CFP2 %in% UGS_norm_traits$subjectID] = "MISSING"
+subCF_NW$CFP2[subCF_NW$CFP2 %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$CFP2, UGS_norm_traits$subjectID, nomatch = 0)]
+
+#subCF_NW$CFP3[!is.na(subCF_NW$CFP3) & !subCF_NW$CFP3 %in% UGS_norm_traits$subjectID] = "MISSING"
+subCF_NW$CFP3[subCF_NW$CFP3 %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$CFP3, UGS_norm_traits$subjectID, nomatch = 0)]
+
+#subCF_NW$CFP4[!is.na(subCF_NW$CFP4) & !subCF_NW$CFP4 %in% UGS_norm_traits$subjectID] = "MISSING"
+subCF_NW$CFP4[subCF_NW$CFP4 %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$CFP4, UGS_norm_traits$subjectID, nomatch = 0)]
+
+#subCF_NW$CFP5[!is.na(subCF_NW$CFP5) & !subCF_NW$CFP5 %in% UGS_norm_traits$subjectID] = "MISSING"
+subCF_NW$CFP5[subCF_NW$CFP5 %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$CFP5, UGS_norm_traits$subjectID, nomatch = 0)]
+```
+
+```{r}
+# add the subject's preference and guess of majority preference to the data frame
+subCF_NW$selfPrf[subCF_NW$Name %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_pref_RLB[match(subCF_NW$Name, UGS_norm_traits$subjectID, nomatch = 0)]
+
+subCF_NW$guess[subCF_NW$Name %in% UGS_norm_traits$subjectID] = UGS_norm_traits$ulti_expected_mostOther_pref[match(subCF_NW$Name, UGS_norm_traits$subjectID, nomatch = 0)]
+
+# code s as 1 for HD and 2 for RLB
+# code g as 0 for guessing HD as majority preference and 1 for guessing RLB as majority preference
+subCF_NW = subCF_NW %>%
+  mutate(s = case_when(selfPrf=='HD' ~1, selfPrf=='RLB' ~2),
+         g = case_when(guess=='RLB' ~1, guess=='HD' ~0))
+```
+
+```{r}
+#replace subject IDs without preference info with NA
+#So the proportion difference between "Rewarding labor" and "HD" is only based on the CFPs with UGS preference info
+subCF_NW_MS2NA = subCF_NW %>%
+  mutate(CFP1_NA = case_when(CFP1=='RLB'  ~'RLB', CFP1=='HD'  ~'HD'),
+         CFP2_NA = case_when(CFP2=='RLB'  ~'RLB', CFP2=='HD'  ~'HD'),
+         CFP3_NA = case_when(CFP3=='RLB'  ~'RLB', CFP3=='HD'  ~'HD'),
+         CFP4_NA = case_when(CFP4=='RLB'  ~'RLB', CFP4=='HD'  ~'HD'),
+         CFP5_NA = case_when(CFP5=='RLB'  ~'RLB', CFP5=='HD'  ~'HD')
+         ) %>%
+  select('Name','CFP1_NA','CFP2_NA','CFP3_NA','CFP4_NA','CFP5_NA','s','g') %>%
+# count the number of CFPs who prefer RLB and the numnber of CFPs who prefer HD
+  rowwise() %>% 
+  mutate(N_RLB = sum(na.omit(c_across(c(CFP1_NA, CFP2_NA, CFP3_NA, CFP4_NA, CFP5_NA))) == 'RLB'), 
+         N_HD = sum(na.omit(c_across(c(CFP1_NA, CFP2_NA, CFP3_NA, CFP4_NA, CFP5_NA))) == 'HD'))
+
+# for now, we will assume having no CFP (or only CFPs with missing preferences) impacts a subject's guess about majority preference the same way as having the same number of CFPs who prefer RLB and who prefer HD
+# we add a column to the dataframe that indicates the proportion difference between CFPs who prefer RLB and CFPs who prefer HD
+# this new column corresponds to the parameter o in the statistical model
+subCF_NW_MS2NA = subCF_NW_MS2NA %>%
+  mutate(o = case_when(N_RLB==0&&N_HD==0 ~0, N_RLB!=0||N_HD!=0 ~(N_RLB-N_HD)/(N_RLB+N_HD)))
+```
+
+```{r}
+#df is the dataframe we will apply the model to
+df = subCF_NW_MS2NA %>%
+  select('g', 's', 'o')
+
+# prepare the data list for ulam
+dat_list <- list(
+   g = as.integer(df$g),
+   s = as.integer(df$s),
+   o = df$o) 
+
+# estimate the model logit(g=='RLB') = a + b*s + c*o
+# where s==1 if self preference is HD and s==2 if self preference is RLB
+# o == Proportion of CFPs who prefer RLB - Proportion of CFPs who prefer HD
+bm <- ulam(
+    alist(
+    g ~ dbinom( 1 , p ) ,
+    logit(p) <- a + b*s + c*o,
+    a ~ dnorm(0, 1.5),
+    b ~ dnorm( 0 , 1.5),
+    c ~ dnorm( 0 , 1 )
+) , data=dat_list , chains=4 , log_lik=TRUE )
+precis( bm , depth=2, prob=0.95)
+```
+
+```{r}
+# plot the priors for bm
+# we want the model to be nonrestrictive on the logit(p) scale
+prior <- extract.prior( bm , n=1e4 )
+
+# a nonrestrictive prior for parameter a should give logit(p) that evenly span [0,1]
+# such that without seeing the data, the model thinks an individual with no self preference and no CFP preference can guess RLB with any probability
+p <- inv_logit( prior$a )
+dens( p , adj=0.1 )
+
+# a nonrestrictive prior for parameter b should give similar logit(p) for s=1 and s=2
+# in other words, logit(p)|s=1 - logit(p)|s=2 should be centered around 0
+p_b1 = inv_logit( prior$a + prior$b )
+p_b2 = inv_logit( prior$a + 2*prior$b )
+dens(p_b1 - p_b2 , adj=0.1) 
+
+# a nonrestrictive prior for parameter c should give similar logit(p) for all possible values of o 
+# it should also allow logit(p)|o=o1 - logit(p)|o=o2 reach -1 or 1 when abs(o1-o2) is maximized
+# both when s=1 and when s=2
+# let's first look at what possible values of o there are
+o_values = sort(unique(df$o))
+# when s=1
+p_b1co1 = inv_logit( prior$a + prior$b + prior$c*o_values[1])
+p_b1co2 = inv_logit( prior$a + prior$b + prior$c*o_values[2])
+p_b1co3 = inv_logit( prior$a + prior$b + prior$c*o_values[3])
+p_b1co4 = inv_logit( prior$a + prior$b + prior$c*o_values[4])
+p_b1co5 = inv_logit( prior$a + prior$b + prior$c*o_values[5])
+p_b1co6 = inv_logit( prior$a + prior$b + prior$c*o_values[6])
+dens(p_b1co1 - p_b1co2 , adj=0.1) 
+dens(p_b1co1 - p_b1co3 , adj=0.1) 
+dens(p_b1co1 - p_b1co4 , adj=0.1) 
+dens(p_b1co1 - p_b1co5 , adj=0.1)
+dens(p_b1co1 - p_b1co6 , adj=0.1) 
+
+# when s=2
+p_b2co1 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[1])
+p_b2co2 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[2])
+p_b2co3 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[3])
+p_b2co4 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[4])
+p_b2co5 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[5])
+p_b2co6 = inv_logit( prior$a + 2*prior$b + prior$c*o_values[6])
+dens(p_b2co1 - p_b2co2 , adj=0.1) 
+dens(p_b2co1 - p_b2co3 , adj=0.1) 
+dens(p_b2co1 - p_b2co4 , adj=0.1) 
+dens(p_b2co1 - p_b2co5 , adj=0.1)
+dens(p_b2co1 - p_b2co6 , adj=0.1) 
+
+
+# the plots with a ~ dnorm(0, 1.5),b ~ dnorm( 0 , 1.5),c ~ dnorm( 0 , 1 ) look pretty good to me
+# these will be the priors we go with
+```
+
+```{r fig.width = 9, fig.height = 7}
+# plot the correspondence between observed data and predicted data
+q = by(df$g, list( df$s , df$o), mean)
+q_s1= q[1,1:length(o_values)]
+q_s2= q[2,1:length(o_values)]
+
+df$n = 1
+n = by(df$n, list( df$s , df$o), sum)
+n_s1= n[1,1:length(o_values)]
+n_s2= n[2,1:length(o_values)]
+
+# generate fake dataset whose o spans from -1 to 1 with s=1 and s=2
+data_s1 = data.frame(s=1,o=(-100:100)/100)
+data_s2 = data.frame(s=2,o=(-100:100)/100)
+
+# model predictions of q based on the fake datasets, with parameter values sampled from the posterior
+qPred_s1 = link(bm, data_s1)
+qPred_s2 = link(bm, data_s2)
+
+# the mean and 90% confidence intervals of the model predictions
+q_mean_s1 = apply(qPred_s1 , 2 , mean)
+q_05_s1 = apply(qPred_s1 , 2 , quantile, prob=0.05)
+q_95_s1 = apply(qPred_s1 , 2 , quantile, prob=0.95)
+
+q_mean_s2 = apply(qPred_s2 , 2 , mean)
+q_05_s2 = apply(qPred_s2 , 2 , quantile, prob=0.05)
+q_95_s2 = apply(qPred_s2 , 2 , quantile, prob=0.95)
+
+
+# plot
+plot(NULL, xlim=c(-1.1,1.1) , ylim=c(0,1.1) , xlab="difference between proportion of co-farming partners preferring rewarding labor vs. HD" ,ylab="proportion guessing rewarding labor as majority preference" , xaxt="n" , yaxt="n", cex.lab=1.2)
+axis( 1 , at=round(o_values , 2), labels=round(o_values , 2)) 
+axis( 2 , at=c(0,0.5,1) , labels=c(0,0.5,1) )
+abline( h=0.5 , lty=2 )
+
+
+points(x=round(o_values , 2), y=q_s1, pch=16 , col="seagreen3" , cex=sqrt(n_s1))
+points(x=round(o_values , 2), y=q_s2, pch=16 , col="orange" , cex=sqrt(n_s2))
+points(x=round(o_values , 2), y=q_s2, pch=16 , col="white" , cex=0.3*sqrt(n_s2))
+
+# add the mean and the 90% confidence intervals to the plot
+points(x=data_s1$o, y=q_mean_s1, col="seagreen4",pch = 21,cex=0.4)
+points(x=data_s1$o, y=q_05_s1, col="seagreen4",pch = 21,cex=0.2)
+points(x=data_s1$o, y=q_95_s1, col="seagreen4",pch = 21,cex=0.2)
+
+points(x=data_s2$o, y=q_mean_s2, col="darkorange2",pch = 21,cex=0.4)
+points(x=data_s2$o, y=q_05_s2, col="darkorange2",pch = 21,cex=0.2)
+points(x=data_s2$o, y=q_95_s2, col="darkorange2",pch = 21,cex=0.2)
+
+```
+
+```{r}
+# calculate the average partial effects for s going from 1 to 2
+# very similar to the previous section
+# just different data to feed to the posterior coefficient estimates
+# the data would have s=1 or s=2, and o same as in the actual data
+
+dt_s1 = data.frame(s=1,o=df$o)
+dt_s2 = data.frame(s=2,o=df$o)
+
+# model predictions of q
+q_s1 = link(bm, dt_s1)
+q_s2 = link(bm, dt_s2)
+
+# the mean and 90% confidence intervals of the average partial effects
+q_ape_s = q_s2-q_s1
+q_ape_s_mean = mean(q_ape_s)
+q_ape_s_05 = quantile(q_ape_s, prob=0.05)
+q_ape_s_95 = quantile(q_ape_s, prob=0.95)
+```
+
+```{r}
+# calculate the average partial effects for 0 going from -0.5 to 0.5
+# very similar to the previous section
+# just different data to feed to the posterior coefficient estimates
+# the data would have o=-0.5 or o=0.5, and s same as in the actual data
+
+dt_ominus = data.frame(s=df$s,o=-0.5)
+dt_oplus = data.frame(s=df$s,o=0.5)
+
+# model predictions of q
+q_ominus = link(bm, dt_ominus)
+q_oplus = link(bm, dt_oplus)
+
+# the mean and 90% confidence intervals of the average partial effects
+q_ape_o = q_oplus-q_ominus
+q_ape_o_mean = mean(q_ape_o)
+q_ape_o_05 = quantile(q_ape_o, prob=0.05)
+q_ape_o_95 = quantile(q_ape_o, prob=0.95)
+```
