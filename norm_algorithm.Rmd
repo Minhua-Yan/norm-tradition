@@ -30,7 +30,7 @@ library(here)
 
 ```{r}
 norm_decision = read.xlsx(here("./data files/individual_norm_algorithm_no_edit.xlsx"), sheet=1)
-land = read.xlsx(here("./data files/coded_CF.xlsx"), sheet=2)
+land = read.xlsx(here("./data files/coded_CF.xlsx"), sheet=1)
 respond = read.xlsx(here("./data files/ult_resp.xlsx"), sheet=1)
 
 norm_decision_bothyear = norm_decision %>%
