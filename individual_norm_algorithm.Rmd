@@ -1,0 +1,405 @@
+---
+title: "individual decision making algorithm"
+output: 
+   html_document:
+     self_contained: false
+
+date: '2023-05-02'
+---
+
+
+```{r}
+library(nnet)
+library(openxlsx)
+library(xtable)
+library(dplyr)
+library(tidyr)
+#library(magrittr); requireNamespace("tidyr");
+
+
+library(ggplot2)
+library(ggpattern)
+library(polycor)
+library(data.table)
+library(stringi)
+library(forcats)
+library(here)
+```
+
+
+
+```{r}
+norm_decision = read.xlsx(here("./data files/individual_norm_algorithm_no_edit.xlsx"), sheet=1)
+land = read.xlsx(here("./data files/coded_CF.xlsx"), sheet=1)
+respond = read.xlsx(here("./data files/ult_resp.xlsx"), sheet=1)
+
+norm_decision_bothyear = norm_decision %>%
+  slice(-1) %>% # remove the row of coding notes
+  unite("CF_condition",c(CF_condition2020,recalled_labor,perceived_labor,CF_condition2019), sep='; ', remove = TRUE, na.rm = TRUE) %>%
+  unite("CF_DIV_pref",c(CF_DIV_pref2020,CF_DIV_pref2019), sep='; ', remove = TRUE, na.rm = TRUE) %>%
+  unite("CF_DIV_pref_justf",c(CF_pref_justf2020,CF_pref_justf2019), sep='; ', remove = TRUE, na.rm = TRUE) %>%
+  unite("CF_DIV_behavior",c(CF_behavior2020,CF_behavior2019), sep='; ', remove = TRUE, na.rm = TRUE) %>%
+  unite("CF_share",c(CF_share2020,CF_share2019), sep='; ', remove = TRUE, na.rm = TRUE)
+```
+
+
+```{r fig.align="center", echo = FALSE,fig.width = 15}
+# preparing the data for plotting distribution of IRL co-farming partnerships' divisions
+land_div = subset(land, land.ID!="LD364017") %>%
+  filter_at(vars(divided,coding_CF),all_vars(.=="yes")) %>%
+  select('subject.ID','land.ID','HV_amount','discussion','CF_division_discussion_timing','share_diff','land_SBJ') 
+
+num_col_sbj = length(land_div)-2
+max_sbj = max(land_div$land_SBJ)
+land_div = reshape(land_div, idvar = "land.ID", timevar = "land_SBJ", direction = "wide")
+land_div = land_div[, c(1,as.vector(t(matrix(data=seq(2,length(land_div),by=1),ncol=max_sbj))))] #reorder cols
+
+land_div =land_div %>%
+  select(, -c(HV_amount.2,HV_amount.3)) %>%
+  mutate(share_diff.1=as.numeric(share_diff.1),
+         share_diff.2=as.numeric(share_diff.2),
+         share_diff.3=as.numeric(share_diff.3)) %>%
+  rowwise() %>% 
+  mutate(share_diff_ave = mean(c(share_diff.1, share_diff.2, share_diff.3),na.rm=TRUE))
+#NEED divisions will have NA as the value for share_diff_ave
+         
+
+df_IRLdiv=data.frame(landID=land_div$land.ID, HV_amount=land_div$HV_amount.1, share_diff=land_div$share_diff_ave)
+
+
+# organize the share difference into three categories: 0-- HD, (0, 0.1]-- small deviations from HD, and (0.1, 1]-- big deviations from HD
+df_IRLdiv = df_IRLdiv %>%
+  mutate(share_diff_cat = case_when(share_diff == 0 ~ 'HD',
+  share_diff > 0 & share_diff <= 0.1 ~ 'Small deviation from HD',
+  share_diff > 0.1 ~ 'Big deviation from HD'))
+
+# subset the co-farming partnerships based on the amount of harvest
+df_IRLdiv_HVFEW = subset(df_IRLdiv, HV_amount=="HVFEW")
+df_IRLdiv_HVLOT = subset(df_IRLdiv, HV_amount=="HVLOT")
+
+df_IRLdiv_HVFEW_cat = as.data.frame(table(factor(df_IRLdiv_HVFEW$share_diff_cat,levels=c("HD","Small deviation from HD","Big deviation from HD")))) %>%
+  setNames(c("division", "count")) %>%
+  mutate(proport = count/sum(count))
+
+df_IRLdiv_HVLOT_cat = as.data.frame(table(factor(df_IRLdiv_HVLOT$share_diff_cat,levels=c("HD","Small deviation from HD","Big deviation from HD"))))%>%
+  setNames(c("division", "count")) %>%
+  mutate(proport = count/sum(count))
+```
+
+```{r eval=FALSE}
+# distribution of IRL co-farming division share differences: stacked based on amount of harvests
+ggplot(df_IRLdiv, aes(x=share_diff)) + 
+        geom_histogram(aes(fill=HV_amount),binwidth=0.01,color="black", position="stack")+
+    scale_x_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)) +
+  #geom_histogram(data=subset(df_div,share_diff==0),binwidth=0.01, colour="black", fill="blue")+
+theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.y = element_blank(),axis.title=element_text(size=16)) +
+  xlab("Harvest share difference between the household getting the most and the household getting the least") +
+  ylab("Number of co-farming partnerships following a division") +
+  stat_bin(aes(y=after_stat(count) + 0.5, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth=0.01)
+```
+
+```{r fig.width = 12}
+# distribution of IRL co-farming division share differences without separating based on amount of harvests
+ggplot(df_IRLdiv, aes(x=share_diff)) + 
+        geom_histogram(aes(y = after_stat(count / sum(count))), binwidth=0.01,color="black",fill="#009bdc")+
+    scale_x_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)) +
+theme_bw()+theme(panel.grid.major = element_blank(), 
+                 #panel.grid.minor = element_blank(), 
+                 text=element_text(size=12), 
+                 axis.title=element_text(size=12)) +
+  # ggtitle("All coding co-farming") +
+  xlab("Harvest share difference between households getting the most and the least") +
+  ylab("Proportion of co-farming following a division") + 
+  stat_bin(aes(y=after_stat(count/sum(count)) + 0.02, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth=0.01) +
+  scale_y_continuous(labels = scales::percent)
+```
+
+```{r fig.width = 5}
+# distribution of IRL co-farming division share differences, only HVFEW, continuous
+ggplot(df_IRLdiv_HVFEW, aes(x=share_diff)) + 
+        geom_histogram(binwidth=0.01,color="black",fill="#009bdc")+
+    scale_x_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)) +
+theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text=element_text(size=16), axis.text.y = element_blank(),axis.title=element_text(size=16)) + ggtitle("When the total harvest is less than one basket for each household") + 
+  xlab("Harvest share difference between the household getting the most and the household getting the least") +
+  ylab("Number of co-farming partnerships following a division") + 
+  stat_bin(aes(y=after_stat(count) + 0.2, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth=0.01)
+
+# distribution of IRL co-farming division share differences, only HVFEW, categorical division
+ggplot(df_IRLdiv_HVFEW_cat, aes(x=division,y=proport,width=0.2))  + geom_bar(stat="identity",color="black",fill="lightblue") + 
+theme_bw() + theme(text=element_text(size=11), 
+                 axis.title=element_text(size=11)) + ylim(0, 0.6) +
+  ylab("Proportion of co-farming with few harvests following a division")
+```
+
+```{r fig.width = 5}
+# only HVLOT, continuous
+ggplot(df_IRLdiv_HVLOT, aes(x=share_diff)) + 
+        geom_histogram( binwidth=0.01,color="black",fill="#009bdc")+ 
+    scale_x_continuous(breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1), limits=c(-0.005,1.005)) +
+  #geom_histogram(data=subset(df_div,share_diff==0),binwidth=0.01, colour="black", fill="blue")+
+theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text=element_text(size=16), axis.text.y = element_blank(),axis.title=element_text(size=16)) + ggtitle("When the total harvest is more than 1 basket for each household") +
+  xlab("Harvest share difference between the household getting the most and the household getting the least") +
+  ylab("Number of co-farming partnerships following a division") + 
+  stat_bin(aes(y=after_stat(count) + 0.2, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth=0.01)
+
+# distribution of IRL co-farming division share differences, only HVLOT, categorical division
+ggplot(df_IRLdiv_HVLOT_cat, aes(x=division,y=proport,width=0.2))  + geom_bar(stat="identity",color="black",fill="navy") + 
+theme_bw() + theme(text=element_text(size=11), 
+                 axis.title=element_text(size=11)) + ylim(0, 0.8) +
+  ylab("Proportion of co-farming with abandunt harvests following a division")
+```
+
+
+```{r fig.align="center", echo = FALSE,fig.width = 12,fig.height = 5}
+# distribution of offers in UG
+
+# context: 2:1
+prop2X = norm_decision$ulti_proposal[which(norm_decision$ulti_behavior_context=="prop2X")];
+df_prop2X = data.frame(offer=prop2X)
+
+ss2To1 = nrow(df_prop2X)
+ggplot(df_prop2X, aes(x=as.numeric(offer))) + 
+        geom_histogram(aes(y = after_stat(count / sum(count))), color="black", fill="white", binwidth = 1)+
+   geom_histogram(data=subset(df_prop2X,offer==25),aes(y = after_stat(count /ss2To1)), binwidth=1, colour="black", fill="forestgreen") +
+   geom_histogram(data=subset(df_prop2X,offer==17),aes(y = after_stat(count / ss2To1)), binwidth=1, colour="black", fill="firebrick1") +
+    scale_x_continuous(breaks = c(0, 10, 17, 20, 22, 24, 25, 26, 30, 40, 50), lim = c(-0.5, 50.5)) + 
+theme_bw()+theme(panel.grid.minor = element_blank(), axis.title=element_text(size=14)) +
+  stat_bin(aes(y=after_stat(count/sum(count)) + 0.02, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth = 1) +
+  scale_y_continuous(labels = scales::percent, lim = c(0, 0.7)) +
+  xlab("Amount out of 50 offered to the responder") +
+  ylab("Proportion of proposers making an offer")
+
+
+# context: 2:2
+prop1X = norm_decision$ulti_proposal[which(norm_decision$ulti_behavior_context=="prop1X")];
+df_prop1X = data.frame(offer=prop1X)
+
+ss2To2 = nrow(df_prop1X)
+ggplot(df_prop1X, aes(x=as.numeric(offer))) + 
+        geom_histogram(aes(y = after_stat(count / sum(count))), color="black", fill="white",binwidth=1)+
+   geom_histogram(data=subset(df_prop1X,offer==25),aes(y = after_stat(count /ss2To2)), binwidth=1, colour="black", fill="royalblue") +
+    scale_x_continuous(breaks = c(0, 10, 20, 25, 26, 27, 30, 40, 50), lim = c(-0.5, 50.5)) + 
+theme_bw()+theme(panel.grid.minor = element_blank(), axis.title=element_text(size=14))+ 
+  stat_bin(aes(y=after_stat(count/sum(count)) + 0.02, label = ifelse(after_stat(count) > 0, after_stat(count), "")), geom="text", binwidth=1) +
+  scale_y_continuous(labels = scales::percent, lim = c(0, 1.05)) +
+  xlab("Amount out of 50 offered to the responder") +
+  ylab("Proportion of proposers making an offer")
+```
+
+```{r fig.align="center", echo = FALSE, fig.height = 4}
+# distribution of reported preferred village norm and preferred UG offer
+norm_decision %>%
+  mutate(survey_pref_RLB = replace(survey_pref_RLB,survey_pref_RLB=="LABOR (HD for kin)"|survey_pref_RLB=="LABOR (NEED for kin)","LABOR"))
+
+as_pref=as.data.frame(table(factor(norm_decision$survey_pref_RLB,levels=c("HD","INBTW","LABOR","MTLABOR"))))
+colnames(as_pref) = c("preference","count")
+as_pref$proportion=as_pref$count/sum(as_pref$count)
+as_pref$For=rep("village norm",4)
+
+
+ugs_pref=as.data.frame(table(factor(norm_decision$ulti_pref_RLB,levels=c("HD","INBTW","LABOR","MTLABOR"))))
+colnames(ugs_pref) = c("preference","count")
+ugs_pref$proportion=ugs_pref$count/sum(ugs_pref$count)
+ugs_pref$For=rep("UG offer",4)
+
+df_pref=rbind(as_pref,ugs_pref)
+df_pref$For=factor(df_pref$For, levels=c("village norm", "UG offer"))
+
+
+ggplot(arrange(df_pref,For), aes(x=preference,y=proportion,fill=For)) + 
+        geom_bar(position="dodge",stat = "identity") 
+```
+
+```{r}
+# RLCF preference justifications of subjects who have internalized HD
+df_asorugs_prefHD = norm_decision %>%
+  filter_at(vars(survey_pref_RLB,ulti_pref_RLB),any_vars(!is.na(.))) %>%
+  mutate(survey_pref_RLB = replace(survey_pref_RLB,survey_pref_RLB=="LABOR (HD for kin)"|survey_pref_RLB=="LABOR (NEED for kin)","LABOR")) %>%
+  select(c(subjectID,sub_divi_kin_diff,survey_pref_RLB,ulti_pref_RLB,CF_condition2020,recalled_labor,perceived_labor,CF_DIV_pref2020,CF_pref_justf2020,CF_behavior2020,CF_condition2019,CF_DIV_pref2019,CF_pref_justf2019,CF_behavior2019)) %>%
+  filter(survey_pref_RLB=="HD" | ulti_pref_RLB=="HD")
+
+
+df_asorugs_and_rlcf_prefHD = df_asorugs_prefHD %>% 
+  filter_at(vars(CF_DIV_pref2020,CF_DIV_pref2019),any_vars(!is.na(.)))
+```
+
+```{r}
+# RLCF preference justifications of subjects who have not internalized HD
+df_asorugs_prefnonHD = norm_decision %>%
+  mutate(survey_pref_RLB = replace(survey_pref_RLB,survey_pref_RLB=="LABOR (HD for kin)"|survey_pref_RLB=="LABOR (NEED for kin)","LABOR")) %>%
+  filter(survey_pref_RLB =="LABOR" | survey_pref_RLB=="INBTW") %>%
+  mutate(survey_pref_RLB = replace(survey_pref_RLB,survey_pref_RLB=="LABOR (HD for kin)"|survey_pref_RLB=="LABOR (NEED for kin)","LABOR")) %>%
+  select(c(subjectID,sub_divi_kin_diff,survey_pref_RLB,ulti_pref_RLB,CF_condition2020,recalled_labor,perceived_labor,CF_DIV_pref2020,CF_pref_justf2020,CF_behavior2020,CF_condition2019,CF_DIV_pref2019,CF_pref_justf2019,CF_behavior2019))
+
+```
+
+
+
+```{r fig.align="center", echo = FALSE, fig.width = 6, fig.height=5}
+# All RLCF justifications for preferring HD
+df_rlcf_prefjustHD = subset(norm_decision_bothyear,!is.na(pref_HD_justf)) %>%
+  select(c(subjectID, pref_HDtononHD, pref_HDtoselfish_nonHD, pref_HD_justf, CF_DIV_behavior, CF_share)) 
+
+all_just=as.data.frame(table(factor(unlist(stri_split(df_rlcf_prefjustHD$pref_HD_justf,fixed="; ")))))
+#all_just is a dataframe of all justifications for preferring HD in the coding CF and their times of appearance
+colnames(all_just) = c("Justification","Count")
+all_just=subset(all_just,Justification!="MISSING") 
+
+all_just = all_just %>% arrange(Count)
+
+# group similar justifications together
+# KIN, FAMILY, and GDRL (good relationship) are grouped to be "RLCFP": relationship with CF partner
+# TRAD, COMMON are grouped to be "WWD": what we do
+
+df_group_just = df_rlcf_prefjustHD
+df_group_just$pref_HD_justf = stri_replace_all_regex(df_group_just$pref_HD_justf,
+                                  pattern=c('CNVNT','NOREASON','WKTGTH','NOCCL','GOOD','CFTGTH','CFPP','NVRTHNK','KIN', 'FAMILY','FAIR', 'GDRL','TRAD','COMMON','CFPELDER','HELPCFP','RND-INS','HVFEW','SBJHSTR','CFGHSTR'),
+                                  replacement=c('HD is convenient','No reason','The households worked together','HD is non-calculating','HD is good','Co-farming entails HD',"Partner would prefer HD",'Never thought to deviate','Relationship with partner', 'Relationship with partner', 'HD is fair','Relationship with partner','HD is what we do','HD is what we do',"Partner's features","Partner's features",'Harvest is insufficient','Harvest is insufficient','Subject past behavior','Co-farming group past behavior'),
+                                  vectorize=FALSE)
+  
+df_group_just_count=as.data.frame(table(factor(unlist(stri_split(df_group_just$pref_HD_justf,fixed="; ")))))
+colnames(df_group_just_count) = c("Justification","Count")
+#all_just is a dataframe of all justifications for preferring HD in the coding CF and their times of appearance
+df_group_just_count=subset(df_group_just_count,Justification!="MISSING") 
+
+df_group_just_count = df_group_just_count %>% arrange(Count)
+
+  
+
+justs=df_group_just_count$Justification
+
+df_group_just_count=as.data.frame(table(factor(unlist(stri_split(df_group_just$pref_HD_justf,fixed="; ")),levels=c("No reason", "HD is convenient","Co-farming entails HD","Subject past behavior","HD is good","Co-farming group past behavior","Partner's features","The households worked together", "HD is non-calculating","Relationship with partner","Never thought to deviate","Partner would prefer HD","Harvest is insufficient","HD is fair","HD is what we do")     )))
+colnames(df_group_just_count) = c("Justification","Count")
+
+ggplot(df_group_just_count, aes(x=Justification,y=Count)) +
+theme_bw()+theme(panel.grid.minor = element_blank(),axis.title=element_text(size=12)) +
+    scale_y_continuous(breaks = c(0, 2, 4, 6, 8, 10)) +
+        geom_bar(width=0.5, position="dodge",stat = "identity", color="black",fill="pink") + geom_text(aes(label = Count), hjust = -0.5) + ylab("Number of subjects reporting a justification") +
+   coord_flip()
+```
+
+
+```{r}
+# note: not used in the paper "by a desire to follow the tradition" 
+
+# shift of preference of the participants who participated in both the general survey and the post-UG survey
+# each row shows how subjects reporting a certain preferred village norm shift to different preferences in the UG
+
+df_as_and_ugs = norm_decision %>%
+  mutate(survey_pref_RLB = replace(survey_pref_RLB,survey_pref_RLB=="LABOR (HD for kin)"|survey_pref_RLB=="LABOR (NEED for kin)","LABOR")) %>% filter_at(vars(survey_pref_RLB,ulti_pref_RLB),all_vars(!is.na(.)))
+
+prefshift=with(df_as_and_ugs,table(survey_pref_RLB,ulti_pref_RLB))
+```
+
+```{r}
+# test for whether the prevelance of HD vs. ``rewarding labor'' is different in preference vs. in behavior
+
+# RLCF
+
+# z test for whether the proportion of ``HD'' as a preferred village rule (13 out of 33) is smaller than the proportion of ``HD'' as a behaviorally followed norm  (20 out of 33)
+# we did not choose a chi-square test because we want to do a one-tailed test
+prop.test(x = c(13, 20), 
+          n = c(33, 33), 
+          alternative = "less",
+          correct = FALSE)
+
+# to verify the z test
+# possible values of h, proportion of ``HD'', in either preference or behavior
+h_vec = seq(0, 1, by=0.0001)
+# a flat prior for h 
+pri_h_vec = rep(1/length(h_vec), length(h_vec))
+# sample size of preferred village rule
+ss_pref = 33
+# sample size of real-life co-farming partnerships
+ss_beh = 33
+
+# the probability of observing 13 successes (preferring HD) out of 33 given different h_pref (proportion of HD in preferred village rule)
+p_data_h_pref = dbinom(13, 33, h_vec)
+# the posterior pdf for h given the data (13 HD out of 33)
+post_h_pref = p_data_h_pref*pri_h_vec/sum(p_data_h_pref*pri_h_vec)
+# posterior cdf
+post_h_pref_cdf = cumsum(post_h_pref)
+
+# the probability of observing 20 successes (following HD) out of 33 given different h_pref (proportion of HD in followed division)
+p_data_h_beh = dbinom(20, 33, h_vec)
+# the posterior pdf for h given the data (20 HD out of 33)
+post_h_beh = p_data_h_beh*pri_h_vec/sum(p_data_h_beh*pri_h_vec)
+# posterior cdf
+post_h_beh_cdf = cumsum(post_h_beh)
+
+# the probability that h_pref is greater than or equal to h_beh
+p_h_pref_greater = sum(post_h_pref* post_h_beh_cdf)
+# this is the magical "p", and it is smaller than p=0.05
+
+# the probability that h_pref is smaller than h_beh
+p_h_pref_greater = sum(append(0,post_h_beh)* append(post_h_pref_cdf,1))
+
+
+# UG
+# z for whether the proportion of ``HD'' as a preferred UG 2:1 treatment offer (13 out of 72) is different from the proportion of ``HD'' as a behaviorally followed offer  (13 out of 21)
+prop.test(x = c(13, 13), 
+          n = c(72, 21), 
+          alternative = "two.sided",
+          correct = FALSE)
+```
+
+
+```{r} 
+# correspondence between behavior and reported preference in UG 2:1 (within the same subject)
+# only for the subjects who were proposers in the 2:1 context
+df_UG_prop2X_beha_atti = norm_decision %>%
+   filter(ulti_behavior_context=="prop2X") %>%
+   select(ulti_pref_RLB,ulti_prop_behavior_rule) %>%
+   mutate(pref_order = recode(ulti_pref_RLB, 'HD'=2, 'INBTW'=3, 'LABOR'=4, 'MTLABOR'=5),     beha_order = recode(ulti_prop_behavior_rule, 'MTHD'=1, 'HD'=2, 'INBTW'=3, 'LABOR'=4, 'MTLABOR'=5))
+
+cor(df_UG_prop2X_beha_atti$pref_order, df_UG_prop2X_beha_atti$beha_order, method="spearman")
+```
+
+```{r} 
+# correspondence between normative belief and normative expectation in UG (within the same subject)
+# but see UGS_guess_bayesian.Rmd for a fancier way of showing people base their guess of majority preference on their own preference
+df_UG_atti = norm_decision %>%
+  filter_at(vars(ulti_pref_RLB,ulti_expected_mostOther_pref),all_vars(!is.na(.))) %>%
+  mutate(pref_order = recode(ulti_pref_RLB, 'HD'=1, 'INBTW'=2, 'LABOR'=3, 'MTLABOR'=4),     guess_order = recode(ulti_expected_mostOther_pref, 'HD'=1, 'INBTW'=2, 'LABOR'=3, 'MTLABOR'=4)) %>%
+  select(pref_order,guess_order) 
+
+polychor(df_UG_atti$pref_order, df_UG_atti$guess_order)
+
+```
+
+```{r}
+# correspondence between UG and RLCF
+# no analysis, just eyeballing, not included in manuscript
+df_ug_and_rlcf = norm_decision %>%
+  mutate(CF_behavior2019=na_if(CF_behavior2019,"MISSING")) %>%
+  mutate(CF_behavior = coalesce(CF_behavior2020,CF_behavior2019)) %>%
+  filter_at(vars(CF_behavior,ulti_behavior_context),all_vars(!is.na(.))) %>%
+  select(c(ulti_behavior_context,ulti_proposal,ulti_accepted,CF_behavior))
+```
+
+```{r}
+# mismatch between normative_belief+normative_expectation and action in UG 2:1
+# no analysis, just eyeballing, not included in manuscript
+df_UG_2To1_attiLB = norm_decision %>%
+  filter(ulti_behavior_context=="prop2X", ulti_pref_RLB=="LABOR",ulti_expected_mostOther_pref=="LABOR")
+```
+
+```{r fig.height = 4}
+# UG responder behavior
+resp2to1 = respond %>%
+  filter(condition=="2To1") %>%
+  select(c(offer0,offer5,offer10,offer15,offer17,offer20,offer25,offer30,offer35,offer40,offer45,offer50))
+accept <- as.data.frame(colSums(resp2to1 == "yes"))
+df_accept = data.frame(offer=c(0,5,10,15,17,20,25,30,35,40,45,50),accepted=accept[,1])
+
+bar_color = c("white","white","white","white","firebrick1","white","forestgreen","white","white","white","white","white")
+ggplot(df_accept, aes(x=offer,y=accepted/20)) + 
+  geom_bar(position="dodge",stat = "identity", color="black",fill=bar_color,width=1) +
+    scale_x_continuous(breaks = c(0, 5, 10, 15, 17, 20, 25, 30, 35, 40, 45, 50), lim = c(-0.5, 50.5)) + scale_y_continuous(labels = scales::percent, breaks = c(0.2, 0.4, 0.6, 0.8, 1.0), lim=c(0,1.15)) +
+  xlab("Proposer offer out of 50") +
+  ylab("Proportion of the 20 responders accepting an offer") +
+theme_bw()+theme(panel.grid.minor = element_blank(),axis.title=element_text(size=10)) +
+    geom_text(aes(label=accepted), vjust=-0.3)
+
+
+```
